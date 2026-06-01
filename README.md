@@ -16,6 +16,14 @@ A research API that questions itself. Submit a query. The system spawns parallel
 
 ## One-Call DX
 
+Trigger it with the `af` CLI (requires af ≥ 0.1.87) — it streams live progress and prints the result:
+
+```bash
+af call meta_deep_research.execute_deep_research --in '{"query": "What companies are investing in AI chips?"}'
+```
+
+Prefer raw HTTP? Hit the API directly with curl:
+
 ```bash
 curl -X POST http://localhost:8080/api/v1/execute/async/meta_deep_research.execute_deep_research \
   -H "Content-Type: application/json" \
