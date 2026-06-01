@@ -16,7 +16,7 @@ A research API that questions itself. Submit a query. The system spawns parallel
 
 ## One-Call DX
 
-Trigger it with the `af` CLI (requires af ≥ 0.1.86) — it streams live progress and prints the result:
+Trigger it with the `af` CLI (requires af ≥ 0.1.87) — it streams live progress and prints the result:
 
 ```bash
 af call meta_deep_research.execute_deep_research --in '{"query": "What companies are investing in AI chips?"}'
