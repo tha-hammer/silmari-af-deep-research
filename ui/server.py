@@ -6,14 +6,16 @@ result is always traceable back to exactly the config that produced it.
 
 Run with the app's venv so `markdown` is available:
     ./.venv/bin/python ui/server.py            # serves http://localhost:8899
-Env overrides: DR_UI_PORT, AGENTFIELD_SERVER, AF_BIN
+Env overrides: DR_UI_PORT, AGENTFIELD_SERVER, AGENTFIELD_API_KEY
+
+The UI talks to the AgentField control plane purely over HTTP (cp_get/cp_post);
+it has no dependency on the `af` CLI binary, so it builds/deploys from ui/ alone.
 """
 import base64
 import hmac
 import json
 import os
 import re
-import subprocess
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -37,9 +39,7 @@ REALM = "Deep Research"
 
 CONTROL_PLANE = os.environ.get("AGENTFIELD_SERVER", "http://localhost:8080").rstrip("/")
 API = CONTROL_PLANE + "/api/v1"
-AF_BIN = os.environ.get("AF_BIN", os.path.expanduser("~/.local/bin/af"))
-# Control planes with AGENTFIELD_API_KEY set require this header on API reads.
-# The `af` CLI reads the same env var itself, so cli calls stay authenticated too.
+# Control planes with AGENTFIELD_API_KEY set require this header on every API call.
 AF_API_KEY = os.environ.get("AGENTFIELD_API_KEY", "")
 
 DEFAULTS = json.load(open(os.path.join(BASE, "defaults.json")))
@@ -82,6 +82,32 @@ def cp_get(path):
         return None
 
 
+def cp_post(path, body):
+    """POST JSON to the control plane API (/api/v1 + path) → parsed JSON (or None).
+
+    On an HTTP error status the parsed error message is returned under an
+    `_error` key so callers can surface it; transport failures return None.
+    """
+    try:
+        req = urllib.request.Request(
+            API + path, data=json.dumps(body).encode(), method="POST"
+        )
+        req.add_header("Content-Type", "application/json")
+        if AF_API_KEY:
+            req.add_header("X-API-Key", AF_API_KEY)
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode() or "{}")
+        except ValueError:
+            detail = {}
+        return {"_error": detail.get("error") or detail.get("message") or f"HTTP {e.code}"}
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
+
+
 def coerce_params(raw):
     """Build a clean, defaulted, type-correct param dict from user input."""
     params = {}
@@ -113,38 +139,39 @@ def build_input_payload(params):
     return payload
 
 
-def parse_run_id(stdout):
-    """`af call --async` prints the bare run id; be tolerant of JSON too."""
-    for line in reversed([l.strip() for l in stdout.splitlines() if l.strip()]):
-        if line.startswith("run_"):
-            return line
-        try:
-            obj = json.loads(line)
-            for k in ("run_id", "runId", "execution_id"):
-                if isinstance(obj, dict) and obj.get(k, "").startswith("run_"):
-                    return obj[k]
-        except ValueError:
-            continue
-    return None
+def cp_get_agent_run(run_id):
+    """Fetch a run's executions over HTTP (replaces the old CLI run lookup)."""
+    try:
+        req = urllib.request.Request(
+            CONTROL_PLANE + f"/api/ui/v2/workflow-runs/{run_id}"
+        )
+        if AF_API_KEY:
+            req.add_header("X-API-Key", AF_API_KEY)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
 
 
 def root_execution_id(run_id):
-    data = cp_get_agent_run(run_id)
-    execs = (data or {}).get("data", {}).get("executions", [])
+    data = cp_get_agent_run(run_id) or {}
+    execs = data.get("executions") or data.get("data", {}).get("executions", [])
     roots = [e for e in execs if not e.get("parent_execution_id")]
     chosen = roots[0] if roots else (execs[0] if execs else None)
     return chosen.get("execution_id") if chosen else None
 
 
-def cp_get_agent_run(run_id):
-    try:
-        out = subprocess.run(
-            [AF_BIN, "agent", "run", "--id", run_id, "-o", "json", "-s", CONTROL_PLANE],
-            capture_output=True, text=True, timeout=30,
-        )
-        return json.loads(out.stdout)
-    except (subprocess.SubprocessError, ValueError):
-        return None
+def resolve_execution_id(run_id):
+    """Cached execution id from the run's cfg, else an HTTP lookup."""
+    p = cfg_path(run_id)
+    if os.path.exists(p):
+        try:
+            eid = json.load(open(p)).get("root_execution_id")
+            if eid:
+                return eid
+        except (ValueError, OSError):
+            pass
+    return root_execution_id(run_id)
 
 
 def launch_run(raw_params):
@@ -152,25 +179,19 @@ def launch_run(raw_params):
     if not params.get("query"):
         return {"error": "query is required"}
     payload = build_input_payload(params)
-    tmp = os.path.join(RUNS_DIR, ".pending-input.json")
-    with open(tmp, "w") as f:
-        json.dump(payload, f)
-    try:
-        out = subprocess.run(
-            [AF_BIN, "call", f"{NODE}.{REASONER}", "--async", "-o", "json",
-             "-s", CONTROL_PLANE, "--in", "@" + tmp],
-            capture_output=True, text=True, timeout=60,
-        )
-    except subprocess.SubprocessError as e:
-        return {"error": f"af call failed to start: {e}"}
-    run_id = parse_run_id(out.stdout)
-    if not run_id:
-        return {"error": "could not parse run_id", "stdout": out.stdout, "stderr": out.stderr[-800:]}
+    resp = cp_post(f"/execute/async/{NODE}.{REASONER}", {"input": payload})
+    if not resp:
+        return {"error": "control plane unreachable"}
+    if resp.get("_error"):
+        return {"error": f"launch rejected: {resp['_error']}"}
+    run_id = resp.get("run_id") or resp.get("runId")
+    if not valid_run_id(run_id):
+        return {"error": "launch response missing a valid run_id", "response": resp}
     cfg = {
         "run_id": run_id,
-        "root_execution_id": root_execution_id(run_id),
+        "root_execution_id": resp.get("execution_id") or resp.get("executionId"),
         "created_at": now_iso(),
-        "status": "running",
+        "status": resp.get("status") or "running",
         "node": NODE,
         "reasoner": REASONER,
         "params": params,
@@ -332,10 +353,9 @@ class Handler(BaseHTTPRequestHandler):
             run_id = body.get("run", "")
             if not valid_run_id(run_id):
                 return self._send(400, json.dumps({"error": "bad run id"}))
-            eid = root_execution_id(run_id)
+            eid = resolve_execution_id(run_id)
             if eid:
-                subprocess.run([AF_BIN, "execution", "cancel", eid, "-s", CONTROL_PLANE],
-                               capture_output=True, text=True, timeout=30)
+                cp_post(f"/executions/{eid}/cancel", {"reason": "cancelled from UI"})
             return self._send(200, json.dumps({"cancelled": eid}))
         return self._send(404, json.dumps({"error": "not found"}))
 

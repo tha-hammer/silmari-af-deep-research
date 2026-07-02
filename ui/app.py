@@ -15,7 +15,6 @@ Env:
 """
 import json
 import os
-import subprocess
 
 from flask import Flask, g, jsonify, request, redirect, send_from_directory
 
@@ -165,12 +164,9 @@ def api_cancel():
     run_id = body.get("run", "")
     if not srv.valid_run_id(run_id):
         return jsonify({"error": "bad run id"}), 400
-    eid = srv.root_execution_id(run_id)
+    eid = srv.resolve_execution_id(run_id)
     if eid:
-        subprocess.run(
-            [srv.AF_BIN, "execution", "cancel", eid, "-s", srv.CONTROL_PLANE],
-            capture_output=True, text=True, timeout=30,
-        )
+        srv.cp_post(f"/executions/{eid}/cancel", {"reason": "cancelled from UI"})
     return jsonify({"cancelled": eid})
 
 
