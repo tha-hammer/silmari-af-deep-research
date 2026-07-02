@@ -1,0 +1,113 @@
+{
+  "node": "meta_deep_research",
+  "reasoner": "execute_deep_research",
+  "fields": [
+    {
+      "key": "query",
+      "label": "Research query",
+      "type": "textarea",
+      "default": "",
+      "required": true,
+      "placeholder": "Describe what you want researched. Multi-line is fine.",
+      "help": "The research question or brief. Be specific; steer sourcing if it matters (e.g. 'prefer the company's own blog and case studies')."
+    },
+    {
+      "key": "research_focus",
+      "label": "Focus (depth)",
+      "type": "range",
+      "default": 3,
+      "min": 1,
+      "max": 5,
+      "step": 1,
+      "help": "1 = surface overview · 3 = balanced · 5 = maximum depth investigation."
+    },
+    {
+      "key": "research_scope",
+      "label": "Scope (breadth)",
+      "type": "range",
+      "default": 3,
+      "min": 1,
+      "max": 5,
+      "step": 1,
+      "help": "1 = narrow/focused · 3 = balanced · 5 = wide-ranging exploration."
+    },
+    {
+      "key": "max_research_loops",
+      "label": "Research loops",
+      "type": "number",
+      "default": 3,
+      "min": 1,
+      "max": 8,
+      "step": 1,
+      "help": "Iterative gap-filling cycles. Each loop finds gaps and does targeted follow-up. More = deeper but slower."
+    },
+    {
+      "key": "num_parallel_streams",
+      "label": "Parallel streams",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "max": 5,
+      "step": 1,
+      "help": "Distinct research angles explored simultaneously per loop."
+    },
+    {
+      "key": "analysis_depth",
+      "label": "Report depth",
+      "type": "select",
+      "default": "ANALYTICAL_BRIEF",
+      "options": [
+        {"value": "EXECUTIVE_SUMMARY", "label": "Executive summary — 1 cluster, minimal"},
+        {"value": "ANALYTICAL_BRIEF", "label": "Analytical brief — 3-4 clusters (balanced)"},
+        {"value": "DEEP_DIVE_REPORT", "label": "Deep dive — 6-10+ sections, incl. gaps & contradictions"}
+      ],
+      "help": "Controls the generated document's length and structure."
+    },
+    {
+      "key": "source_strictness",
+      "label": "Source strictness",
+      "type": "select",
+      "default": "mixed",
+      "options": [
+        {"value": "strict", "label": "Strict — authoritative sources only"},
+        {"value": "mixed", "label": "Mixed — balance of source types"},
+        {"value": "permissive", "label": "Permissive — include all relevant sources"}
+      ],
+      "help": "'strict' reduces junk/off-topic sources but may return fewer results."
+    },
+    {
+      "key": "tension_lens",
+      "label": "Framing lens",
+      "type": "select",
+      "default": "balanced",
+      "options": [
+        {"value": "balanced", "label": "Balanced — objective, multi-perspective"},
+        {"value": "bull", "label": "Bull — optimistic, opportunity-focused"},
+        {"value": "bear", "label": "Bear — cautious, risk-focused"}
+      ],
+      "help": "Perspective used when writing the final document."
+    },
+    {
+      "key": "mode",
+      "label": "Mode",
+      "type": "text",
+      "default": "general",
+      "help": "Research mode. 'general' for broad research."
+    },
+    {
+      "key": "evidence_style",
+      "label": "Evidence style",
+      "type": "text",
+      "default": "standard",
+      "help": "Citation and evidence presentation style."
+    },
+    {
+      "key": "model",
+      "label": "Model override (optional)",
+      "type": "text",
+      "default": "",
+      "placeholder": "leave blank to use .env DEFAULT_MODEL",
+      "help": "e.g. openrouter/anthropic/claude-sonnet-4. Blank = server default."
+    }
+  ]
+}

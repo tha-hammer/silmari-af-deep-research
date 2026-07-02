@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Deep Research</title>
+<style>
+  :root{ --bg:#0e1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3140;
+    --txt:#e6edf3; --muted:#8b949e; --accent:#5b9dff; --danger:#f85149; --ok:#3fb950; }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%, #16203a 0%, var(--bg) 55%);color:var(--txt)}
+  .card{width:360px;max-width:92vw;background:var(--panel);border:1px solid var(--border);
+    border-radius:14px;padding:26px 24px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 18px}
+  label{display:block;font-weight:600;font-size:12.5px;margin:12px 0 5px}
+  input{width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--border);
+    border-radius:8px;padding:10px 11px;font:inherit}
+  input:focus{outline:none;border-color:var(--accent)}
+  button{width:100%;margin-top:18px;background:var(--accent);color:#04101f;border:none;
+    border-radius:8px;padding:11px;font-weight:700;font-size:14px;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .msg{margin-top:14px;font-size:12.5px;min-height:16px}
+  .msg.err{color:var(--danger)} .msg.ok{color:var(--ok)}
+  .links{margin-top:16px;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.9}
+  .links a{color:var(--accent);text-decoration:none;cursor:pointer}
+  .brand{font-size:11px;letter-spacing:.5px;color:var(--muted);text-transform:uppercase;margin-bottom:10px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+  <form class="card" id="form" autocomplete="on">
+    <div class="brand">🔬 AF Deep Research</div>
+    <h1 id="title">Sign in</h1>
+    <p class="sub" id="subtitle">Authorized access only.</p>
+
+    <div id="emailRow">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username">
+    </div>
+    <div id="passwordRow">
+      <label for="password" id="passwordLabel">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" minlength="8">
+    </div>
+    <div id="confirmRow" class="hidden">
+      <label for="confirm">Confirm new password</label>
+      <input id="confirm" type="password" autocomplete="new-password" minlength="8">
+    </div>
+
+    <button id="submit" type="submit">Sign in</button>
+    <div class="msg" id="msg"></div>
+
+    <div class="links">
+      <a id="forgotLink">Forgot password?</a>
+      <div id="signupToggle"><span id="toggleText">Need an account?</span> <a id="toggleLink">Sign up</a></div>
+      <a id="backToSignin" class="hidden">← Back to sign in</a>
+    </div>
+  </form>
+<script>
+  var $ = function(id){ return document.getElementById(id); };
+  var token = new URLSearchParams(window.location.search).get("token");
+  var mode = token ? "reset" : "signin"; // signin | signup | forgot | reset
+
+  function show(el, on){ el.classList[on ? "remove" : "add"]("hidden"); }
+  function msg(text, cls){ var m = $("msg"); m.textContent = text || ""; m.className = "msg " + (cls || ""); }
+
+  function render(){
+    var cfg = ({
+      signin: {title:"Sign in", sub:"Authorized access only.", btn:"Sign in", email:1, pw:1, confirm:0, pwLabel:"Password", pwAuto:"current-password"},
+      signup: {title:"Create account", sub:"Authorized emails only.", btn:"Sign up", email:1, pw:1, confirm:0, pwLabel:"Password", pwAuto:"new-password"},
+      forgot: {title:"Reset your password", sub:"We'll email you a reset link.", btn:"Send reset link", email:1, pw:0, confirm:0},
+      reset:  {title:"Set a new password", sub:"Choose a new password for your account.", btn:"Set new password", email:0, pw:1, confirm:1, pwLabel:"New password", pwAuto:"new-password"}
+    })[mode];
+    $("title").textContent = cfg.title;
+    $("subtitle").textContent = cfg.sub;
+    $("submit").textContent = cfg.btn;
+    show($("emailRow"), cfg.email);
+    show($("passwordRow"), cfg.pw);
+    show($("confirmRow"), cfg.confirm);
+    if(cfg.pw){ $("passwordLabel").textContent = cfg.pwLabel; $("password").setAttribute("autocomplete", cfg.pwAuto); }
+    // footer links
+    show($("forgotLink"), mode === "signin");
+    show($("signupToggle"), mode === "signin" || mode === "signup");
+    show($("backToSignin"), mode === "forgot" || mode === "reset");
+    $("toggleText").textContent = mode === "signup" ? "Already have an account?" : "Need an account?";
+    $("toggleLink").textContent = mode === "signup" ? "Sign in" : "Sign up";
+    msg("");
+  }
+  function setMode(m){ mode = m; render(); }
+
+  $("forgotLink").onclick = function(){ setMode("forgot"); };
+  $("backToSignin").onclick = function(){ if(mode==="reset"){ window.location.href="/login"; } else { setMode("signin"); } };
+  $("toggleLink").onclick = function(){ setMode(mode === "signup" ? "signin" : "signup"); };
+
+  async function post(path, body){
+    var res = await fetch(path, { method:"POST", credentials:"include",
+      headers:{ "Content-Type":"application/json", "rid":"emailpassword", "st-auth-mode":"cookie" },
+      body: JSON.stringify(body) });
+    var data = await res.json().catch(function(){ return {}; });
+    return { res: res, data: data };
+  }
+
+  $("form").addEventListener("submit", async function(e){
+    e.preventDefault();
+    $("submit").disabled = true; msg("…");
+    try{
+      var email = $("email").value.trim(), password = $("password").value, confirm = $("confirm").value;
+
+      if(mode === "forgot"){
+        if(!email){ msg("Enter your email.", "err"); return; }
+        await post("/auth/user/password/reset/token", { formFields:[{id:"email", value:email}] });
+        // Always report success (no account enumeration).
+        msg("If that email has an account, a reset link is on its way. Check your inbox.", "ok");
+        return;
+      }
+
+      if(mode === "reset"){
+        if(password.length < 8){ msg("Password must be at least 8 characters.", "err"); return; }
+        if(password !== confirm){ msg("Passwords don't match.", "err"); return; }
+        var r = await post("/auth/user/password/reset", { formFields:[{id:"password", value:password}], token: token });
+        if(r.data.status === "OK"){ msg("Password updated. Redirecting to sign in…", "ok"); setTimeout(function(){ window.location.href="/login"; }, 1200); }
+        else if(r.data.status === "RESET_PASSWORD_INVALID_TOKEN_ERROR"){ msg("This reset link is invalid or expired. Request a new one.", "err"); }
+        else if(r.data.status === "FIELD_ERROR" && r.data.formFields){ msg(r.data.formFields.map(function(f){return f.error;}).join(" "), "err"); }
+        else { msg("Couldn't reset password (" + r.res.status + ").", "err"); }
+        return;
+      }
+
+      // signin / signup
+      if(!email || !password){ msg("Email and password required.", "err"); return; }
+      var s = await post("/auth/" + (mode === "signup" ? "signup" : "signin"),
+        { formFields:[{id:"email", value:email}, {id:"password", value:password}] });
+      var data = s.data;
+      if(data.status === "OK"){ msg("Welcome. Loading…", "ok"); window.location.href = "/"; return; }
+      if(data.status === "WRONG_CREDENTIALS_ERROR"){ msg("Wrong email or password.", "err"); }
+      else if(data.status === "EMAIL_ALREADY_EXISTS_ERROR"){ msg("That email already has an account — sign in.", "err"); setMode("signin"); }
+      else if(data.status === "FIELD_ERROR" && data.formFields){ msg(data.formFields.map(function(f){return f.error;}).join(" "), "err"); }
+      else if(data.status === "SIGN_UP_NOT_ALLOWED" || data.status === "GENERAL_ERROR"){ msg(data.message || "Not allowed.", "err"); }
+      else { msg("Unexpected response (" + s.res.status + ").", "err"); }
+    }catch(err){
+      msg("Network error. Try again.", "err");
+    }finally{
+      $("submit").disabled = false;
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>

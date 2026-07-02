@@ -96,3 +96,10 @@ enhanced_research.json
 *.db-shm
 *.db-wal
 *.bolt
+
+# UI run artifacts (ephemeral per-run configs written at runtime)
+ui/runs/
+
+# Research/report outputs generated during execution
+mc-*.md
+monte-carlo-*.md

@@ -47,6 +47,13 @@ Homepage = "https://github.com/Agent-Field/af-deep-research"
 Repository = "https://github.com/Agent-Field/af-deep-research.git"
 Issues = "https://github.com/Agent-Field/af-deep-research/issues"
 
+# NOTE: `include = ["agent*"]` matches NO packages in this fork (leftover from the
+# upstream af-deep-research layout). So `pip install -e .` installs the declared
+# dependencies but does NOT install the local packages (skills, reasoners) or root
+# modules (main, temporal_context, doc_generation_pipeline). Imports work because
+# the Dockerfile sets PYTHONPATH=/app. If you ever run outside that image, either
+# set PYTHONPATH=. or fix this to `include = ["skills*", "reasoners*"]` (+ py_modules
+# for the root modules).
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agent*"]

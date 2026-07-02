@@ -53,7 +53,7 @@ if ollama_base_url:
     print(f"🦙 Using local Ollama at: {ollama_base_url}")
 
 ai_config = AIConfig(
-    model=os.getenv("DEFAULT_MODEL", "openrouter/deepseek/deepseek-chat-v3.1"),
+    model=os.getenv("DEFAULT_MODEL", "openrouter/anthropic/claude-sonnet-4"),
     temperature=float(os.getenv("TEMPERATURE", "0.6")),
     max_tokens=8192,
     litellm_params=litellm_params,
@@ -3164,4 +3164,7 @@ async def execute_deep_research(
 # ==============================================================================
 
 if __name__ == "__main__":
-    app.serve(auto_port=True, host="0.0.0.0")
+    # Bind IPv6 (dual-stack) so Railway's private network (IPv6-only) can reach
+    # this agent's callback for health checks + execution dispatch. "::" still
+    # accepts IPv4 locally. host override: AGENT_BIND_HOST.
+    app.serve(auto_port=True, host=os.getenv("AGENT_BIND_HOST", "::"))

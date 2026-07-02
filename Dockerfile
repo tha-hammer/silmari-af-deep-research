@@ -4,10 +4,14 @@
 FROM python:3.10-slim
 
 # Set environment variables
+# PYTHONPATH=/app makes local packages (skills, reasoners, root modules) importable
+# regardless of cwd — the app relies on `from skills.search import ...` (lazy) and
+# `pip install -e .` does NOT install them (see pyproject packages.find note).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
