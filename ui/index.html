@@ -92,8 +92,18 @@ let SCHEMA=null, ACTIVE=null, POLL=null;
 function h(html){const t=document.createElement('template');t.innerHTML=html.trim();return t.content.firstChild;}
 function toast(msg,ms=2600){const t=document.getElementById('toast');t.innerHTML=`<div class="toast">${msg}</div>`;setTimeout(()=>t.innerHTML='',ms);}
 
+// Session guard: when SuperTokens rejects an expired/absent session (401),
+// send the user to the login page instead of surfacing the raw JSON error.
+// Returns a never-resolving promise on 401 so callers stop cleanly while the
+// browser navigates away.
+async function api(url,opts){
+  const res=await fetch(url,opts);
+  if(res.status===401){location.href='/login';return new Promise(()=>{});}
+  return res;
+}
+
 async function loadSchema(){
-  const d=await (await fetch('/defaults')).json();
+  const d=await (await api('/defaults')).json();
   SCHEMA=d;
   const form=document.getElementById('form');
   const advanced=['num_parallel_streams','tension_lens','mode','evidence_style','model'];
@@ -130,7 +140,7 @@ async function runSearch(){
   if(!p.query.trim()){toast('⚠ Query is required');return;}
   const btn=document.getElementById('submit');btn.disabled=true;btn.textContent='Launching…';
   try{
-    const res=await (await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})).json();
+    const res=await (await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})).json();
     if(res.error){toast('❌ '+res.error);}
     else{toast('🚀 Launched '+res.run_id);ACTIVE=res.run_id;await refreshRuns();openRun(res.run_id);}
   }catch(e){toast('❌ '+e);}
@@ -138,7 +148,7 @@ async function runSearch(){
 }
 
 async function refreshRuns(){
-  const d=await (await fetch('/api/runs')).json();
+  const d=await (await api('/api/runs')).json();
   document.getElementById('cp').textContent='control plane: '+d.control_plane;
   const list=document.getElementById('runlist');
   document.getElementById('runcount').textContent=d.runs.length?`(${d.runs.length})`:'';
@@ -174,7 +184,7 @@ async function openRun(runId){
 async function poll(runId,first){
   if(ACTIVE!==runId)return;
   let d;
-  try{d=await (await fetch('/api/result?run='+encodeURIComponent(runId))).json();}catch(e){return;}
+  try{d=await (await api('/api/result?run='+encodeURIComponent(runId))).json();}catch(e){return;}
   if(ACTIVE!==runId)return;
   const v=document.getElementById('viewer');
   const st=(d.status||'unknown').toLowerCase();
