@@ -318,6 +318,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         return True
 
+    # The run APIs below are DISABLED (B7). The standalone, unscoped
+    # `Handler` must not serve `list_runs`/`result_for`/`launch_run`/cancel —
+    # every run path now goes through the Flask factory (`ui/app.py`) with a
+    # per-user `RunContext`, `RunRepo`, and `assert_run_access` guard. These
+    # endpoints return 410 Gone with NO side effects (no CP call, no repo/FS
+    # read or write). The pure helpers above remain intact and are reused.
+    _GONE = b'{"error": "gone: run API moved behind the authenticated Flask app"}'
+
     def do_GET(self):
         if not self._authorized():
             return self._require_auth()
@@ -326,37 +334,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, open(os.path.join(BASE, "index.html"), "rb").read(), "text/html; charset=utf-8")
         if u.path == "/defaults":
             return self._send(200, json.dumps(DEFAULTS))
-        if u.path == "/api/runs":
-            return self._send(200, json.dumps({"runs": list_runs(), "control_plane": CONTROL_PLANE}))
-        if u.path == "/api/result":
-            run_id = parse_qs(u.query).get("run", [""])[0]
-            if not valid_run_id(run_id):
-                return self._send(400, json.dumps({"error": "bad run id"}))
-            return self._send(200, json.dumps(result_for(run_id)))
+        if u.path in ("/api/runs", "/api/result"):
+            return self._send(410, self._GONE)
         return self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self):
         if not self._authorized():
             return self._require_auth()
         u = urlparse(self.path)
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            body = json.loads(raw or b"{}")
-        except ValueError:
-            return self._send(400, json.dumps({"error": "invalid JSON"}))
-        if u.path == "/api/run":
-            res = launch_run(body)
-            code = 400 if res.get("error") else 200
-            return self._send(code, json.dumps(res))
-        if u.path == "/api/cancel":
-            run_id = body.get("run", "")
-            if not valid_run_id(run_id):
-                return self._send(400, json.dumps({"error": "bad run id"}))
-            eid = resolve_execution_id(run_id)
-            if eid:
-                cp_post(f"/executions/{eid}/cancel", {"reason": "cancelled from UI"})
-            return self._send(200, json.dumps({"cancelled": eid}))
+        if u.path in ("/api/run", "/api/cancel"):
+            # 410 BEFORE reading the body — no launch, no cancel, no side effects.
+            return self._send(410, self._GONE)
         return self._send(404, json.dumps({"error": "not found"}))
 
 

@@ -1,0 +1,8 @@
+{
+  "default_org_slug": "silmari-default",
+  "default_org_name": "Silmari Default",
+  "default_org_id": "e4e47131-cd9f-4882-9925-194e9db062ca",
+  "bootstrap_owner_emails": ["maceo.jourdan@gmail.com"],
+  "legacy_import_owner_email": "maceo.jourdan@gmail.com",
+  "default_run_visibility": "private"
+}

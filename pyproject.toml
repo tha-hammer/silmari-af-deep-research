@@ -37,10 +37,15 @@ dependencies = [
     "aiohttp>=3.8",
     "websockets",
     "backoff",
+    "psycopg[binary]",
+    "flask",
+    "flask-cors",
+    "supertokens-python",
+    "markdown",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0", "black>=22.0.0", "flake8>=5.0.0", "mypy>=0.991"]
+dev = ["pytest>=7.0.0", "hypothesis>=6.0.0", "black>=22.0.0", "flake8>=5.0.0", "mypy>=0.991"]
 
 [project.urls]
 Homepage = "https://github.com/Agent-Field/af-deep-research"
@@ -63,7 +68,7 @@ line-length = 88
 target-version = ['py38']
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -73,3 +78,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: requires an external Postgres via TEST_DATABASE_URL (deselect with -m 'not integration')",
+]

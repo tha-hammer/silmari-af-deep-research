@@ -15,11 +15,15 @@ RUN pip install --no-cache-dir \
     flask \
     flask-cors \
     supertokens-python \
-    markdown
+    markdown \
+    "psycopg[binary]"
 
-COPY . .
+# Copy the ui/ build context into an inner `ui/` package so the app's absolute
+# `ui.workspace` / `ui.tenancy` imports resolve at runtime (root dir = ui/).
+COPY . /app/ui/
 
 # app.py binds UI_BIND_HOST (default "::" for Railway private net) on DR_UI_PORT.
 EXPOSE 8899
 
-CMD ["python", "app.py"]
+# Run as a module so the `ui` package is importable (cwd /app is on sys.path).
+CMD ["python", "-m", "ui.app"]
