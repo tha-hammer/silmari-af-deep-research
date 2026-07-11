@@ -595,7 +595,15 @@ def _configure_supertokens(app: Flask) -> None:
 
 
 # Production app (SuperTokens on; DB-free at import via unprovisioned placeholders).
-app = create_app(default_deps())
+# EMERGENCY ROLLBACK (2026-07-11): enable_gateway_trust=True was deployed
+# without verifying the actual end-to-end browser login flow first, and it
+# locked users out of the direct login they were relying on
+# (deep-research-ui-production.up.railway.app/login -> 403, since the
+# before_request gate isn't scoped to exclude /login/auth). Disabling it here
+# restores direct access immediately. The code/tests for Behaviors 5/5b are
+# unchanged and still pass -- re-enable only after the full flow is verified
+# against a real browser session, not curl.
+app = create_app(default_deps(), enable_gateway_trust=False)
 
 
 if __name__ == "__main__":
