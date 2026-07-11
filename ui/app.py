@@ -23,6 +23,7 @@ Env:
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -85,6 +86,11 @@ ST_CONN = os.environ.get(
     "SUPERTOKENS_CONNECTION_URI", os.environ.get("CONNECTION_URI", "http://localhost:3567")
 ).rstrip("/")
 ST_KEY = os.environ.get("SUPERTOKENS_API_KEY", os.environ.get("API_KEY", "")) or None
+# Unified login: set to a shared parent domain (e.g. ".silmari.app") so the session
+# cookie is shared across sibling services (research.*, reels.*). Unset (None) keeps
+# the current host-scoped cookie — required until both services sit under one custom
+# parent domain (a shared cookie is impossible across *.up.railway.app, a public suffix).
+COOKIE_DOMAIN = os.environ.get("SESSION_COOKIE_DOMAIN") or None
 
 CONFIG_PATH = os.path.join(BASE, "config.json")
 with open(CONFIG_PATH) as _cf:
@@ -288,6 +294,7 @@ def create_app(
     deps: AppDeps,
     auth_decorator: Any = verify_session,
     enable_supertokens: bool = True,
+    enable_gateway_trust: bool = True,
 ) -> Flask:
     """Build a Flask app with all routes bound to ``deps``.
 
@@ -296,6 +303,24 @@ def create_app(
     ``@auth_decorator(session_required=False)``. Tests inject a fake factory
     and set ``enable_supertokens=False`` to skip SuperTokens ``init``/Middleware
     /CORS entirely.
+
+    ``enable_gateway_trust`` (Behaviors 5 & 5b, C4/C4b) — defaults to ``True``
+    (secure/fail-closed by default, mirroring ``enable_supertokens``):
+
+    - every request must carry ``X-Gateway-Secret`` matching
+      ``GATEWAY_SHARED_SECRET`` (constant-time compare); missing/mismatched/
+      **empty-env** all fail closed with 403 (RedTeam admin-token lesson —
+      an unset secret must never mean "allow");
+    - once admitted, request identity is resolved from the trusted
+      ``X-User-Id`` header instead of this app's own SuperTokens session
+      (this app's host never receives the browser's session cookie once
+      fronted by the gateway — see plan REVIEW). A trusted request with no
+      ``X-User-Id`` is a malformed/incomplete trusted request -> 401, never a
+      silent fall-through to session-based resolution.
+
+    Tests that don't exercise B5/B5b pass ``enable_gateway_trust=False`` to
+    keep exercising this app's own SuperTokens-session path directly
+    (dev/local/non-gateway callers).
     """
     app = Flask(__name__)
 
@@ -304,10 +329,35 @@ def create_app(
 
     log = deps.logger
 
+    if enable_gateway_trust:
+
+        @app.before_request
+        def _enforce_gateway_trust():  # pragma: no branch - simple guard
+            expected = os.environ.get("GATEWAY_SHARED_SECRET", "")
+            provided = request.headers.get("X-Gateway-Secret", "")
+            if not expected or not hmac.compare_digest(provided, expected):
+                return jsonify({"error": "forbidden"}), 403
+            if not request.headers.get("X-User-Id", "").strip():
+                return jsonify({"error": "unauthorized"}), 401
+            return None
+
     def _resolve_ctx() -> RunContext:
+        trusted_user_id = request.headers.get("X-User-Id") if enable_gateway_trust else None
         return current_run_context(
-            deps.session_provider(), deps.identity, deps.config
+            deps.session_provider(), deps.identity, deps.config, trusted_user_id
         )
+
+    # Once gateway trust is active, THIS app's own SuperTokens session is no
+    # longer the authentication authority — the gateway is (C4 admits the
+    # request; C4b/`_resolve_ctx` resolves identity from the trusted header,
+    # fail-closed via `Denied`). Requiring a session at the outer
+    # `@auth_decorator()` gate too would reject every gateway-proxied request
+    # outright, since this app's host never receives the browser's session
+    # cookie once fronted (plan REVIEW). So the outer gate's
+    # `session_required` tracks the INVERSE of gateway-trust mode; it is
+    # unaffected when gateway trust is off (dev/local/direct — unchanged
+    # behavior for every pre-existing route/test).
+    _auth_required = auth_decorator(session_required=not enable_gateway_trust)
 
     # ---- static / auth pages (preserved exactly) ------------------------- #
     @app.route("/", methods=["GET"])
@@ -326,13 +376,13 @@ def create_app(
         return send_from_directory(BASE, "login.html")
 
     @app.route("/defaults", methods=["GET"])
-    @auth_decorator()
+    @_auth_required
     def defaults() -> Response:
         return jsonify(srv.DEFAULTS)
 
     # ---- run APIs (org-scoped, per-user) --------------------------------- #
     @app.route("/api/runs", methods=["GET"])
-    @auth_decorator()
+    @_auth_required
     def api_runs() -> Any:
         try:
             ctx = _resolve_ctx()
@@ -349,7 +399,7 @@ def create_app(
         return jsonify({"runs": runs, "control_plane": srv.CONTROL_PLANE})
 
     @app.route("/api/run", methods=["POST"])
-    @auth_decorator()
+    @_auth_required
     def api_run() -> Any:
         try:
             ctx = _resolve_ctx()
@@ -406,7 +456,7 @@ def create_app(
         return jsonify(dto), 200
 
     @app.route("/api/result", methods=["GET"])
-    @auth_decorator()
+    @_auth_required
     def api_result() -> Any:
         try:
             ctx = _resolve_ctx()
@@ -434,7 +484,7 @@ def create_app(
         return jsonify(_build_result_dto(ref, payload))
 
     @app.route("/api/cancel", methods=["POST"])
-    @auth_decorator()
+    @_auth_required
     def api_cancel() -> Any:
         try:
             ctx = _resolve_ctx()
@@ -528,7 +578,7 @@ def _configure_supertokens(app: Flask) -> None:
         supertokens_config=SupertokensConfig(connection_uri=ST_CONN, api_key=ST_KEY),
         framework="flask",
         recipe_list=[
-            session.init(),
+            session.init(cookie_domain=COOKIE_DOMAIN),
             emailpassword.init(
                 override=emailpassword.InputOverrideConfig(apis=_restrict_signups)
             ),

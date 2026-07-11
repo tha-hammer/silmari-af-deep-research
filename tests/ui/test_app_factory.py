@@ -33,7 +33,12 @@ def test_create_app_returns_flask_without_supertokens():
     from ui.app import create_app
 
     holder = SessionHolder(FakeSession("st_u1"))
-    app = create_app(_deps(), auth_decorator=identity_auth(holder), enable_supertokens=False)
+    app = create_app(
+        _deps(),
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
+    )
     assert isinstance(app, Flask)
 
 
@@ -42,7 +47,12 @@ def test_defaults_uses_injected_auth_and_serves_defaults():
     import ui.app as appmod
 
     holder = SessionHolder(FakeSession("st_u1"))
-    app = create_app(_deps(), auth_decorator=identity_auth(holder), enable_supertokens=False)
+    app = create_app(
+        _deps(),
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
+    )
     client = app.test_client()
 
     resp = client.get("/defaults")
@@ -54,7 +64,12 @@ def test_missing_session_is_401_from_injected_auth():
     from ui.app import create_app
 
     holder = SessionHolder(None)  # no session
-    app = create_app(_deps(), auth_decorator=identity_auth(holder), enable_supertokens=False)
+    app = create_app(
+        _deps(),
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
+    )
     client = app.test_client()
 
     assert client.get("/defaults").status_code == 401

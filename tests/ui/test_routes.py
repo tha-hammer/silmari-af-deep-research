@@ -38,7 +38,12 @@ def _build(*, repo=None, control_plane=None, launch=None, identity=None):
 
     from ui.app import create_app
 
-    app = create_app(deps, auth_decorator=identity_auth(holder), enable_supertokens=False)
+    app = create_app(
+        deps,
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
+    )
     return app, app.test_client(), repo, cp, ln, holder
 
 
@@ -69,7 +74,10 @@ def test_result_401_when_no_session():
     from ui.app import create_app
 
     client = create_app(
-        deps, auth_decorator=identity_auth(holder), enable_supertokens=False
+        deps,
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
     ).test_client()
     assert client.get("/api/result?run=run_a_0001").status_code == 401
 
@@ -211,7 +219,12 @@ def test_workflow_closure_launch_then_list_is_per_user():
     )
     from ui.app import create_app
 
-    app = create_app(deps, auth_decorator=identity_auth(holder), enable_supertokens=False)
+    app = create_app(
+        deps,
+        auth_decorator=identity_auth(holder),
+        enable_supertokens=False,
+        enable_gateway_trust=False,
+    )
     client = app.test_client()
 
     # u1 launches — observed only through the HTTP response body.
