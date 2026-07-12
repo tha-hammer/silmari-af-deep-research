@@ -294,6 +294,34 @@ def _safe_refresh(
 
 
 # --------------------------------------------------------------------------- #
+# Gateway-trust public path allowlist
+# --------------------------------------------------------------------------- #
+# Paths that must stay reachable WITHOUT the gateway secret even when this app is
+# fronted by the unified-login gateway: the login pages (served by this app) and
+# the SuperTokens /auth API (called directly by login.html's JS). An unscoped
+# gateway-trust gate 403'd these and locked users out of direct login -- the
+# 2026-07-11 emergency rollback. Exact-match the login routes; prefix-match /auth.
+_PUBLIC_AUTH_PATHS = frozenset({"/login", "/login/reset-password", "/auth"})
+
+
+def _is_public_auth_path(path: str) -> bool:
+    return path in _PUBLIC_AUTH_PATHS or path.startswith("/auth/")
+
+
+def _is_browser_navigation(sec_fetch_dest: str, accept: str) -> bool:
+    """True for a top-level browser navigation (document load), False for a
+    ``fetch()``/XHR. Decides whether an expired/absent session sends the browser
+    to /login (clean redirect) or returns the default 401 JSON (so the SPA's own
+    fetch guard handles it). Prefers the ``Sec-Fetch-Dest`` fetch-metadata
+    header; falls back to Accept content negotiation for older clients."""
+    dest = (sec_fetch_dest or "").lower()
+    if dest:
+        return dest == "document"
+    a = (accept or "").lower()
+    return "text/html" in a and "application/json" not in a
+
+
+# --------------------------------------------------------------------------- #
 # App factory
 # --------------------------------------------------------------------------- #
 def create_app(
@@ -339,6 +367,11 @@ def create_app(
 
         @app.before_request
         def _enforce_gateway_trust():  # pragma: no branch - simple guard
+            # Keep the auth surface (login pages + SuperTokens /auth API) open so
+            # direct/local login still works when this app is fronted by the
+            # gateway. Everything else remains fail-closed.
+            if _is_public_auth_path(request.path):
+                return None
             expected = os.environ.get("GATEWAY_SHARED_SECRET", "")
             provided = request.headers.get("X-Gateway-Secret", "")
             if not expected or not hmac.compare_digest(provided, expected):
@@ -541,8 +574,31 @@ def _configure_supertokens(app: Flask) -> None:
         APIInterface,
         GeneralErrorResponse,
     )
+    from supertokens_python.recipe.session import InputErrorHandlers
+    from supertokens_python.recipe.session.utils import (
+        default_try_refresh_token_callback,
+        default_unauthorised_callback,
+    )
     from supertokens_python.framework.flask import Middleware
     from flask_cors import CORS
+
+    # On an expired/absent session, send a top-level browser navigation to the
+    # login page (clean redirect) instead of surfacing SuperTokens' raw
+    # ``{"message":"try refresh token"}`` JSON. XHR/fetch callers keep the
+    # default 401 so the SPA's own fetch guard (index.html) can react.
+    async def _on_try_refresh_token(req, message, response):
+        if _is_browser_navigation(
+            req.get_header("Sec-Fetch-Dest") or "", req.get_header("Accept") or ""
+        ):
+            return response.redirect("/login")
+        return await default_try_refresh_token_callback(req, message, response)
+
+    async def _on_unauthorised(req, message, response):
+        if _is_browser_navigation(
+            req.get_header("Sec-Fetch-Dest") or "", req.get_header("Accept") or ""
+        ):
+            return response.redirect("/login")
+        return await default_unauthorised_callback(req, message, response)
 
     def _restrict_signups(original: APIInterface) -> APIInterface:
         orig_sign_up_post = original.sign_up_post
@@ -586,7 +642,13 @@ def _configure_supertokens(app: Flask) -> None:
         supertokens_config=SupertokensConfig(connection_uri=ST_CONN, api_key=ST_KEY),
         framework="flask",
         recipe_list=[
-            session.init(cookie_domain=COOKIE_DOMAIN),
+            session.init(
+                cookie_domain=COOKIE_DOMAIN,
+                error_handlers=InputErrorHandlers(
+                    on_try_refresh_token=_on_try_refresh_token,
+                    on_unauthorised=_on_unauthorised,
+                ),
+            ),
             emailpassword.init(
                 override=emailpassword.InputOverrideConfig(apis=_restrict_signups)
             ),

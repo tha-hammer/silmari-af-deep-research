@@ -64,10 +64,43 @@ def test_secret_unset_in_env_fails_closed(monkeypatch):
     assert resp.status_code == 403
 
 
-def test_direct_hit_to_unprotected_route_is_still_refused(monkeypatch):
-    # /login has no @auth_decorator at all — the gateway-trust check must
-    # still gate it (before_request runs before any route-level decorator).
+def test_login_page_bypasses_gateway_trust(monkeypatch):
+    # /login must stay reachable WITHOUT the gateway secret so direct/local
+    # login still works when this app is fronted by the gateway (fixes the
+    # 2026-07-11 rollback where an unscoped gate 403'd /login and locked users
+    # out). It is served by this app's own route, not SuperTokens.
     monkeypatch.setenv("GATEWAY_SHARED_SECRET", SECRET)
     client = _app(gateway_secret_env=SECRET).test_client()
-    resp = client.get("/login")
-    assert resp.status_code == 403
+    assert client.get("/login").status_code == 200
+
+
+def test_reset_password_page_bypasses_gateway_trust(monkeypatch):
+    monkeypatch.setenv("GATEWAY_SHARED_SECRET", SECRET)
+    client = _app(gateway_secret_env=SECRET).test_client()
+    assert client.get("/login/reset-password").status_code == 200
+
+
+def test_auth_api_bypasses_gateway_trust(monkeypatch):
+    # The SuperTokens /auth/* API is called directly by login.html's JS and must
+    # not be 403'd by gateway trust. With enable_supertokens=False the route is
+    # unmounted (404) — the point is it is NOT 403 (the gate let it through).
+    monkeypatch.setenv("GATEWAY_SHARED_SECRET", SECRET)
+    client = _app(gateway_secret_env=SECRET).test_client()
+    assert client.get("/auth/session/refresh").status_code != 403
+
+
+def test_protected_routes_still_gated_when_auth_surface_excluded(monkeypatch):
+    # Excluding the auth surface must not weaken the gate on real routes.
+    monkeypatch.setenv("GATEWAY_SHARED_SECRET", SECRET)
+    client = _app(gateway_secret_env=SECRET).test_client()
+    assert client.get("/defaults").status_code == 403
+    assert client.get("/api/runs").status_code == 403
+    assert client.get("/").status_code == 403
+
+
+def test_lookalike_login_path_is_not_bypassed(monkeypatch):
+    # Bypass is exact-match on the login routes + /auth prefix — a lookalike
+    # such as /x/login must remain fail-closed.
+    monkeypatch.setenv("GATEWAY_SHARED_SECRET", SECRET)
+    client = _app(gateway_secret_env=SECRET).test_client()
+    assert client.get("/x/login").status_code == 403
