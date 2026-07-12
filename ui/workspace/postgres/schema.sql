@@ -27,3 +27,12 @@ CREATE INDEX IF NOT EXISTS ix_research_run_org_user_created
 
 CREATE INDEX IF NOT EXISTS ix_research_run_org_run_id
     ON deepresearch.research_run (org_id, run_id);
+
+-- INT-01 (B1): execution_id is the cross-app correlation key (CloudEvents subject / single
+-- join key across deep-research and reel-af). A partial UNIQUE index makes it a safe FK/join
+-- target while leaving the transient pre-dispatch NULL execution_id rows un-constrained.
+-- Mirrors migrations/deepresearch/112_add_unique_execution_id_research_run.sql so a fresh
+-- schema.sql apply and the 100..112 migration set converge on the same index.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_research_run_execution_id
+    ON deepresearch.research_run (execution_id)
+    WHERE execution_id IS NOT NULL;
