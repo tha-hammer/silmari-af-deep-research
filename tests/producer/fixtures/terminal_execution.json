@@ -1,0 +1,16 @@
+{
+  "execution_id": "exec_abc123",
+  "run_id": "3f6d1a90-0000-4000-8000-000000000abc",
+  "status": "succeeded",
+  "result": {
+    "metadata": {
+      "query": "How do short-form reels convert viewers into subscribers?",
+      "title": "How short-form reels convert viewers"
+    },
+    "research_package": {
+      "document": "# How short-form reels convert\n\nBody of the research document...",
+      "sources": ["https://example.com/a", "https://example.com/b"]
+    }
+  },
+  "notes": "OWNER-ONLY internal stitching commentary. The event builder must never copy this."
+}
