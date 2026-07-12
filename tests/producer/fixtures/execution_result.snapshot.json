@@ -1,0 +1,15 @@
+{
+  "execution_id": "exec_abc123",
+  "status": "succeeded",
+  "result": {
+    "metadata": {
+      "query": "How do short-form reels convert viewers into subscribers?",
+      "title": "How short-form reels convert viewers"
+    },
+    "research_package": {
+      "document": "# How short-form reels convert\n\nBody of the research document...",
+      "sources": ["https://example.com/a", "https://example.com/b"]
+    }
+  },
+  "notes": "OWNER-ONLY internal stitching commentary. reel-af must NEVER read this (execution_ownership_mismatch)."
+}
