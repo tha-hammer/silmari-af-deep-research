@@ -56,7 +56,11 @@ def test_defaults_regression():
     _, client, *_ = _build()
     resp = client.get("/defaults")
     assert resp.status_code == 200
-    assert resp.get_json() == appmod.srv.DEFAULTS
+    payload = resp.get_json()
+    # /defaults passes the reasoner schema through unchanged and adds the
+    # reel-af deep-link base for the DR "Send to reels" control.
+    assert {k: payload[k] for k in appmod.srv.DEFAULTS} == appmod.srv.DEFAULTS
+    assert payload["reels_base"] == appmod.REELS_BASE_URL
 
 
 # --------------------------------------------------------------------------- #

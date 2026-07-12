@@ -57,7 +57,10 @@ def test_defaults_uses_injected_auth_and_serves_defaults():
 
     resp = client.get("/defaults")
     assert resp.status_code == 200
-    assert resp.get_json() == appmod.srv.DEFAULTS
+    payload = resp.get_json()
+    # Schema passthrough plus the reel-af deep-link base (DR "Send to reels").
+    assert {k: payload[k] for k in appmod.srv.DEFAULTS} == appmod.srv.DEFAULTS
+    assert payload["reels_base"] == appmod.REELS_BASE_URL
 
 
 def test_missing_session_is_401_from_injected_auth():

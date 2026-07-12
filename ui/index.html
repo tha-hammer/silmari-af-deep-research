@@ -87,7 +87,7 @@
 <div id="toast"></div>
 
 <script>
-let SCHEMA=null, ACTIVE=null, POLL=null;
+let SCHEMA=null, ACTIVE=null, POLL=null, REELS_BASE='';
 
 function h(html){const t=document.createElement('template');t.innerHTML=html.trim();return t.content.firstChild;}
 function toast(msg,ms=2600){const t=document.getElementById('toast');t.innerHTML=`<div class="toast">${msg}</div>`;setTimeout(()=>t.innerHTML='',ms);}
@@ -105,6 +105,7 @@ async function api(url,opts){
 async function loadSchema(){
   const d=await (await api('/defaults')).json();
   SCHEMA=d;
+  REELS_BASE=(d.reels_base||'').replace(/\/$/,'');
   const form=document.getElementById('form');
   const advanced=['num_parallel_streams','tension_lens','mode','evidence_style','model'];
   const main=[], adv=[];
@@ -206,7 +207,7 @@ async function poll(runId,first){
         <span>${d.section_count} sections</span>
         <span>${d.source_count} sources</span>
         ${mins?`<span>${mins}</span>`:''}
-        <span style="margin-left:auto"><a href="#" onclick="dl('${runId}');return false;" style="color:var(--accent)">⭳ markdown</a></span>
+        <span style="margin-left:auto">${REELS_BASE?`<a href="${REELS_BASE}/create-from-research?research_run_id=${encodeURIComponent(runId)}" class="pill" style="color:var(--accent)">→ Send to reels</a> `:''}<a href="#" onclick="dl('${runId}');return false;" style="color:var(--accent)">⭳ markdown</a></span>
       </div>${cfg}<div class="report">${d.html}</div>`;
     window._md=d.markdown;
   }else if(running){

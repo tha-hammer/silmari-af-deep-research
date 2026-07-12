@@ -101,6 +101,12 @@ ALLOWED_EMAILS = {
     e.strip().lower() for e in CONFIG.get("allowed_emails", []) if e.strip()
 }
 
+# Base URL of the reel-af app, for the DR "Send to reels" deep-link. Env wins so
+# each deploy points at its sibling; falls back to the config.json tunable.
+REELS_BASE_URL = (
+    os.environ.get("REELS_BASE_URL") or CONFIG.get("reels_base_url", "")
+).rstrip("/")
+
 TENANCY_CONFIG_PATH = os.path.join(BASE, "config", "tenancy.json")
 
 
@@ -378,7 +384,9 @@ def create_app(
     @app.route("/defaults", methods=["GET"])
     @_auth_required
     def defaults() -> Response:
-        return jsonify(srv.DEFAULTS)
+        payload = dict(srv.DEFAULTS)
+        payload["reels_base"] = REELS_BASE_URL
+        return jsonify(payload)
 
     # ---- run APIs (org-scoped, per-user) --------------------------------- #
     @app.route("/api/runs", methods=["GET"])
