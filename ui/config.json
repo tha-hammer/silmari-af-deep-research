@@ -1,6 +1,6 @@
 {
   "_doc": "Server-side UI config (ARCHITECTURE.md §config: all tunables live here, no literals in code, one-jump lookup). Edit + redeploy to change.",
-  "reels_base_url": "https://reel-af-ui-production.up.railway.app",
+  "reels_base_url": "https://reels.silmari.ai",
   "allowed_emails": [
     "maceo.jourdan@gmail.com",
     "elicia.goodale@gmail.com"

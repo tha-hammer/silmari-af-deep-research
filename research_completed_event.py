@@ -30,7 +30,7 @@ from typing import Any, Mapping
 # --------------------------------------------------------------------------- #
 
 #: CloudEvents ``type`` for the completion announcement.
-EVENT_TYPE_RESEARCH_COMPLETED = "research.completed"
+EVENT_TYPE_RESEARCH_COMPLETED = "com.silmari.research.completed.v1"
 
 #: CloudEvents ``source`` — the producing app.
 EVENT_SOURCE = "silmari-af-deep-research"
