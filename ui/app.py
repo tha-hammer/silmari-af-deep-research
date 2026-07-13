@@ -48,6 +48,7 @@ from ui.launch_adapter import (
     ControlPlaneUnreachable,
     LaunchError,
     LaunchResponseInvalid,
+    ReelDispatch,
 )
 from ui.tenancy.context import RunContext, current_run_context
 from ui.tenancy.identity import IdentityPort
@@ -63,7 +64,15 @@ from ui.workspace.ports import (
     RepositoryUnavailable,
     RunRepo,
 )
+from ui.workspace.postgres.reel_job_repository import ReelJobRepository
 from ui.workspace.postgres.repository import ResearchRunRepository
+from ui.workspace.reel_job import (
+    ReelJobPort,
+    ReelJobRef,
+    assert_reel_job_access,
+    refresh_reel_job_status,
+    to_reel_status_json,
+)
 from ui.workspace.research_run import (
     ResearchRunRef,
     assert_run_access,
@@ -127,6 +136,8 @@ class AppDeps:
     identity: IdentityPort
     control_plane: ControlPlanePort
     launch: Callable[[Mapping[str, JSONValue]], Any]
+    reel_job_repo: ReelJobPort
+    reel_dispatch: Callable[[Mapping[str, JSONValue]], Any]
     config: Mapping[str, Any]
     session_provider: Callable[[], SessionLike | None]
     clock: Callable[[], datetime]
@@ -179,6 +190,18 @@ def make_default_run_repo() -> RunRepo:
     return ResearchRunRepository(_dsn)
 
 
+def make_default_reel_job_repo() -> ReelJobPort:
+    """Lazy psycopg reel-job repo. No connect at import; missing env defers to use."""
+
+    def _dsn() -> str:
+        dsn = os.environ.get("DEEPRESEARCH_DATABASE_URL")
+        if not dsn:
+            raise RepositoryUnavailable("DEEPRESEARCH_DATABASE_URL is not set")
+        return dsn
+
+    return ReelJobRepository(_dsn)
+
+
 def make_default_identity(config: Mapping[str, Any] | None = None) -> IdentityPort:
     """Build the default-org identity resolver from tenancy config (no DB)."""
     cfg = config if config is not None else _load_tenancy_config()
@@ -221,6 +244,8 @@ def default_deps() -> AppDeps:
         identity=make_default_identity(config),
         control_plane=ControlPlaneHTTP(srv),
         launch=ControlPlaneLaunch(srv),
+        reel_job_repo=make_default_reel_job_repo(),
+        reel_dispatch=ReelDispatch(srv),
         config=config,
         session_provider=default_session_provider,
         clock=lambda: datetime.now(timezone.utc),
@@ -291,6 +316,22 @@ def _safe_refresh(
     except (RepositoryUnavailable, NotFound, Exception) as exc:  # noqa: BLE001
         logger.warning("refresh_failed", extra={"run_id": ref.run_id, "err": str(exc)})
         return ref
+
+
+def _safe_refresh_reel(
+    job: ReelJobRef,
+    ctx: RunContext,
+    repo: ReelJobPort,
+    control_plane: ControlPlanePort,
+    logger: logging.Logger,
+) -> ReelJobRef:
+    """Best-effort reel-job status refresh; never fails a poll if the CP/DB hiccups
+    (a last-known status is returned, never a fabricated ``succeeded``)."""
+    try:
+        return refresh_reel_job_status(job, ctx, repo, control_plane)
+    except (RepositoryUnavailable, NotFound, Exception) as exc:  # noqa: BLE001
+        logger.warning("reel_refresh_failed", extra={"job_id": str(job.id), "err": str(exc)})
+        return job
 
 
 # --------------------------------------------------------------------------- #
@@ -557,6 +598,111 @@ def create_app(
             except (RepositoryUnavailable, NotFound):
                 pass
         return jsonify({"cancelled": execution_id})
+
+    # ---- Create Reel dispatch + poll (MW Phase 3, C7 / spec §5-6) --------- #
+    @app.route("/api/create-reel", methods=["POST"])
+    @_auth_required
+    def api_create_reel() -> Any:
+        # C7: verified session -> org isolation -> non-empty selection (fail-closed)
+        # -> server-injected principal -> CP dispatch FIRST -> write row on accept.
+        try:
+            ctx = _resolve_ctx()
+        except Denied:
+            return jsonify({"error": "forbidden"}), 403
+        body = request.get_json(silent=True) or {}
+        selected = body.get("selectedParagraphs")
+        if not isinstance(selected, list) or len(selected) == 0:
+            return jsonify({"error": "empty_selection"}), 400  # fail-closed (C7)
+        source_run_id = body.get("sourceRunId", "")
+        if not srv.valid_run_id(source_run_id):
+            return jsonify({"error": "bad run id"}), 400
+        try:
+            ref = deps.run_repo.get_by_context(ctx, source_run_id)
+        except NotFound:
+            return jsonify({"error": "run not found"}), 400
+        except RepositoryUnavailable:
+            return jsonify({"error": "storage unavailable"}), 503
+        try:
+            assert_run_access(ref, ctx)  # research_run.org_id == session.activeOrgId
+        except Denied:
+            return jsonify({"error": "forbidden"}), 403
+        # Server-injected principal (never client-supplied); re-sort by position.
+        ordered = sorted(
+            selected, key=lambda p: p.get("position", 0) if isinstance(p, Mapping) else 0
+        )
+        payload = {
+            "selectedParagraphs": ordered,
+            "sourceRunId": ref.run_id,
+            "sourcePackageRef": ref.execution_id or ref.result_ref,
+            "citations": body.get("citations", []),
+            "userId": str(ctx.user_id),
+            "orgId": str(ctx.org_id),
+        }
+        # Dispatch FIRST — fail BEFORE writing the reel_job row (P-1 ordering rule).
+        try:
+            dispatch = deps.reel_dispatch(payload)
+        except (ControlPlaneUnreachable, LaunchError, LaunchResponseInvalid) as exc:
+            return jsonify({"error": "dispatch_failed", "detail": str(exc)}), 502
+        job_id = deps.uuid_factory()
+        job = ReelJobRef(
+            id=job_id,
+            org_id=ctx.org_id,
+            created_by=ctx.user_id,
+            status="queued",
+            source_research_run_id=ref.id,
+            execution_id=dispatch.execution_id,
+            result_ref=None,
+            client_request_id=body.get("clientRequestId"),
+            created_at=deps.clock(),
+        )
+        try:
+            deps.reel_job_repo.create(job)
+        except Conflict:
+            return jsonify({"error": "duplicate reel job"}), 409
+        except RepositoryUnavailable:
+            log.error(
+                "orphaned_dispatch",
+                extra={
+                    "execution_id": dispatch.execution_id,
+                    "org_id": str(ctx.org_id),
+                    "created_by": str(ctx.user_id),
+                    "reason": "db_write_failed_after_dispatch",
+                },
+            )
+            return jsonify({"error": "failed to record reel job"}), 500
+        return (
+            jsonify(
+                {
+                    "job_id": str(job_id),
+                    "execution_id": dispatch.execution_id,
+                    "status": "queued",
+                }
+            ),
+            202,
+        )
+
+    @app.route("/api/reel-status", methods=["GET"])
+    @_auth_required
+    def api_reel_status() -> Any:
+        try:
+            ctx = _resolve_ctx()
+        except Denied:
+            return jsonify({"error": "forbidden"}), 403
+        job_id = request.args.get("job", "").strip()
+        if not job_id:
+            return jsonify({"error": "bad job id"}), 400
+        try:
+            job = deps.reel_job_repo.get_by_context(ctx, job_id)
+        except NotFound:
+            return jsonify({"error": "not found"}), 404
+        except RepositoryUnavailable:
+            return jsonify({"error": "storage unavailable"}), 503
+        try:
+            assert_reel_job_access(job, ctx)  # only creating org_id/created_by may poll
+        except Denied:
+            return jsonify({"error": "forbidden"}), 403
+        job = _safe_refresh_reel(job, ctx, deps.reel_job_repo, deps.control_plane, log)
+        return jsonify(to_reel_status_json(job))
 
     return app
 
