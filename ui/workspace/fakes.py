@@ -14,6 +14,7 @@ from typing import Callable
 from ..tenancy.context import RunContext
 from .dto import JSONValue, LaunchResult
 from .ports import CancelResult, Conflict, ExecutionPayload, NotFound
+from .reel_job import ReelJobRef, ReelJobStatus
 from .research_run import ResearchRunRef, RunStatus
 
 
@@ -62,6 +63,82 @@ class FakeRunRepo:
         updated = ref.with_status(status, completed_at, duration_ms)
         self._rows[run_id] = updated
         return updated
+
+
+class FakeReelJobRepo:
+    """Dict-backed ``ReelJobPort``. Keyed by ``str(id)``; org-scoped reads.
+
+    Enforces the same org-scoping + ``Conflict`` on a duplicate
+    ``(org_id, created_by, client_request_id)`` as the psycopg adapter, so the
+    ``test_reel_job_ports`` contract suite parametrizes across both.
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[str, ReelJobRef] = {}
+        self.ready_calls: int = 0
+
+    def ensure_ready(self) -> None:
+        self.ready_calls += 1
+
+    def create(self, ref: ReelJobRef) -> None:
+        key = str(ref.id)
+        if key in self._rows:
+            raise Conflict(f"duplicate reel job id: {ref.id}")
+        if ref.client_request_id is not None and any(
+            r.org_id == ref.org_id
+            and r.created_by == ref.created_by
+            and r.client_request_id == ref.client_request_id
+            for r in self._rows.values()
+        ):
+            raise Conflict(
+                f"duplicate client_request_id: {ref.client_request_id}"
+            )
+        self._rows[key] = ref
+
+    def get_by_context(self, ctx: RunContext, job_id: str) -> ReelJobRef:
+        ref = self._rows.get(str(job_id))
+        # A row outside the active org is indistinguishable from absent data.
+        if ref is None or ref.org_id != ctx.org_id:
+            raise NotFound(f"reel job not found: {job_id}")
+        return ref
+
+    def update_status(
+        self,
+        ctx: RunContext,
+        job_id: str,
+        status: ReelJobStatus,
+        result_ref: str | None,
+        completed_at: datetime | None,
+    ) -> ReelJobRef:
+        ref = self._rows.get(str(job_id))
+        if ref is None or ref.org_id != ctx.org_id:
+            raise NotFound(f"reel job not found: {job_id}")
+        updated = ref.with_status(status, result_ref, completed_at)
+        self._rows[str(job_id)] = updated
+        return updated
+
+
+class FakeReelDispatch:
+    """Deterministic Create-Reel dispatch. Returns a fixed ``ReelDispatchResult``
+    or raises a pre-seeded error (drives the B2 dispatch-failure red-at-seam)."""
+
+    def __init__(
+        self,
+        execution_id: str = "exec_reel_0001",
+        run_id: str | None = "run_reel_0001",
+        error: Exception | None = None,
+    ) -> None:
+        from ui.launch_adapter import ReelDispatchResult
+
+        self._result = ReelDispatchResult(execution_id=execution_id, run_id=run_id)
+        self._error = error
+        self.calls: list[dict[str, JSONValue]] = []
+
+    def __call__(self, payload):  # type: ignore[no-untyped-def]
+        self.calls.append(dict(payload))
+        if self._error is not None:
+            raise self._error
+        return self._result
 
 
 class FakeControlPlane:

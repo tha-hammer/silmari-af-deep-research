@@ -13,6 +13,7 @@ the route can map them to the plan's status codes (400 / 502).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
@@ -88,3 +89,50 @@ class ControlPlaneLaunch:
             reasoner=self._reasoner,
             params=coerced,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Reel dispatch (MW Phase 3, B2) — Create-Reel → control plane → reel-af
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ReelDispatchResult:
+    """The control-plane's acceptance of a Create-Reel dispatch.
+
+    ``execution_id`` is the poll key stored on the ``reel_job`` row; ``run_id``
+    is the CP run alias (may be absent — only ``execution_id`` is load-bearing).
+    """
+
+    execution_id: str
+    run_id: str | None = None
+
+
+class ReelDispatch:
+    """Callable that dispatches a Create-Reel ``SelectionPayload`` to reel-af
+    through the control plane, reusing ``ControlPlaneLaunch``'s error taxonomy.
+
+    Unlike ``ControlPlaneLaunch`` (which builds the research *query* payload),
+    this posts the already-assembled, server-injected ``SelectionPayload`` as the
+    async input to ``reel-af.reel_research_to_reel``. ``cp_post`` is the transport
+    only; ``srv`` is injected for testability. All failure modes raise the shared
+    typed exceptions so the route maps every one to a 502 ``dispatch_failed``.
+    """
+
+    TARGET = "reel-af.reel_research_to_reel"
+
+    def __init__(self, srv: Any = _srv, target: str | None = None) -> None:
+        self._srv = srv
+        self._target = target or self.TARGET
+
+    def __call__(self, payload: Mapping[str, JSONValue]) -> ReelDispatchResult:
+        resp = self._srv.cp_post(
+            f"/execute/async/{self._target}", {"input": dict(payload)}
+        )
+        if resp is None:
+            raise ControlPlaneUnreachable("control plane unreachable")
+        if resp.get("_error"):
+            raise LaunchError(f"dispatch rejected: {resp['_error']}")
+        execution_id = resp.get("execution_id") or resp.get("executionId")
+        if not execution_id:
+            raise LaunchResponseInvalid("dispatch response missing execution_id")
+        run_id = resp.get("run_id") or resp.get("runId")
+        return ReelDispatchResult(execution_id=execution_id, run_id=run_id)

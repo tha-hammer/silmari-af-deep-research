@@ -70,6 +70,7 @@
 <header>
   <h1>🔬 Deep Research</h1>
   <span class="cp" id="cp"></span>
+  <button class="btn" id="createReel" style="margin-left:auto" disabled onclick="createReel()">Create Reel</button>
 </header>
 <div class="wrap">
   <div class="left">
@@ -207,9 +208,13 @@ async function poll(runId,first){
         <span>${d.section_count} sections</span>
         <span>${d.source_count} sources</span>
         ${mins?`<span>${mins}</span>`:''}
-        <span style="margin-left:auto">${REELS_BASE?`<a href="${REELS_BASE}/create-from-research?research_run_id=${encodeURIComponent(runId)}" class="pill" style="color:var(--accent)">→ Send to reels</a> `:''}<a href="#" onclick="dl('${runId}');return false;" style="color:var(--accent)">⭳ markdown</a></span>
+        <span style="margin-left:auto"><a href="#" onclick="dl('${runId}');return false;" style="color:var(--accent)">⭳ markdown</a></span>
       </div>${cfg}<div class="report">${d.html}</div>`;
     window._md=d.markdown;
+    window._sources=d.sources||[];
+    const rep=v.querySelector('.report');
+    if(rep)wrapSelectable(rep);   // per-paragraph checkboxes (spec §6.2)
+    resetCreateReel();
   }else if(running){
     v.innerHTML=`<div class="status-line"><span class="spinner"></span><span class="pill running">running</span>
       <span>Research in progress — this can take many minutes at high depth.</span></div>${cfg}
@@ -224,6 +229,95 @@ async function poll(runId,first){
 function dl(runId){
   const blob=new Blob([window._md||''],{type:'text/markdown'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=runId+'.md';a.click();
+}
+
+// ---- Create Reel: per-paragraph selection + §5 state machine (B3) ------- //
+let REEL_POLL=null;
+
+// Wrap each report paragraph in a selectable row with a stable
+// data-para-id="{sectionIndex}-{paragraphIndex}" (spec §6.2). Section index
+// advances on each <h2>; paragraph index resets per section. Derived from the
+// rendered report DOM so the markdown download (window._md) stays clean.
+function wrapSelectable(root){
+  let si=-1,pi=0,pos=0;
+  root.querySelectorAll(':scope > *').forEach(el=>{
+    if(el.tagName==='H2'){si++;pi=0;return;}
+    if(el.tagName!=='P')return;
+    const pid=(si<0?0:si)+'-'+pi;
+    el.classList.add('para-selectable');
+    el.dataset.paraId=pid; el.dataset.position=pos;
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.className='para-check';
+    cb.setAttribute('aria-label','select paragraph '+pid);
+    cb.style.marginRight='8px';
+    cb.addEventListener('change',updateCreateBtn);
+    el.prepend(cb);
+    pi++; pos++;
+  });
+}
+
+function updateCreateBtn(){
+  const b=document.getElementById('createReel'); if(!b)return;
+  const n=document.querySelectorAll('.para-check:checked').length;
+  b.disabled=(n===0);                                   // Inactive <-> Active
+  b.textContent=n>0?`Create Reel (${n} selected)`:'Create Reel';
+}
+
+function resetCreateReel(){
+  if(REEL_POLL){clearInterval(REEL_POLL);REEL_POLL=null;}
+  document.querySelectorAll('.para-check').forEach(c=>{c.disabled=false;});
+  updateCreateBtn();
+}
+
+async function createReel(){
+  if(!ACTIVE)return;
+  const rows=[...document.querySelectorAll('.para-selectable')]
+    .filter(d=>d.querySelector('.para-check:checked'));
+  if(!rows.length)return;                               // fail-closed (also C7 server-side)
+  const selectedParagraphs=rows.map(d=>({
+    paragraphId:d.dataset.paraId,
+    text:(d.innerText||'').trim(),
+    position:parseInt(d.dataset.position||'0',10),
+  })).sort((a,b)=>a.position-b.position);
+  const b=document.getElementById('createReel');
+  b.disabled=true; b.textContent='Submitting...';       // Submitting: lock checkboxes
+  document.querySelectorAll('.para-check').forEach(c=>{c.disabled=true;});
+  let r;
+  try{
+    r=await api('/api/create-reel',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({selectedParagraphs,sourceRunId:ACTIVE})});
+  }catch(e){return reelError('network error');}
+  if(r.status!==202){                                    // Submitting -> Error
+    let msg='dispatch failed'; try{const j=await r.json(); msg=j.detail||j.error||msg;}catch(e){}
+    return reelError(msg);
+  }
+  const j=await r.json();
+  b.textContent='Composing reel...';                     // Composing
+  toast('Reel job queued. You can navigate away.');
+  pollReel(j.job_id);
+}
+
+function pollReel(jobId){
+  if(REEL_POLL)clearInterval(REEL_POLL);
+  REEL_POLL=setInterval(async()=>{                       // poll every 8s (spec §5)
+    let d;
+    try{d=await (await api('/api/reel-status?job='+encodeURIComponent(jobId))).json();}catch(e){return;}
+    const s=(d.status||'').toLowerCase();
+    if(s==='succeeded'){clearInterval(REEL_POLL);REEL_POLL=null;reelDone(d.reel_ref);}
+    else if(s==='failed'||s==='cancelled'){clearInterval(REEL_POLL);REEL_POLL=null;reelError('composition '+s);}
+  },8000);
+}
+
+function reelDone(ref){                                   // Composing -> Done
+  toast(ref?`Reel ready! <a href="${ref}" style="color:var(--accent)">view</a>`:'Reel ready!',6000);
+  const b=document.getElementById('createReel'); b.textContent='Create Reel'; b.disabled=true;
+  document.querySelectorAll('.para-check').forEach(c=>{c.disabled=false;c.checked=false;});
+}
+
+function reelError(msg){                                  // * -> Error (checkboxes re-enabled)
+  toast('⚠ '+msg,4000);
+  document.querySelectorAll('.para-check').forEach(c=>{c.disabled=false;});
+  updateCreateBtn();
 }
 
 loadSchema().then(refreshRuns);

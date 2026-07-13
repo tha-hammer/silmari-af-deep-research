@@ -8,6 +8,7 @@ from uuid import UUID
 
 from ui.tenancy.context import RunContext
 from ui.tenancy.ports import SessionLike
+from ui.workspace.reel_job import ReelJobRef, ReelJobStatus
 from ui.workspace.research_run import ResearchRunRef, RunStatus, Visibility
 
 # Deterministic identity fixtures.
@@ -64,6 +65,35 @@ def make_ref(
     )
 
 
+def make_reel_job_ref(
+    *,
+    id: UUID | None = None,
+    org_id: UUID = CTX_ORG,
+    created_by: UUID = CTX_USER,
+    status: ReelJobStatus = "queued",
+    source_research_run_id: UUID | None = None,
+    execution_id: str | None = "exec_reel_0001",
+    result_ref: str | None = None,
+    client_request_id: str | None = None,
+    title: str | None = None,
+    created_at: datetime = FIXED_NOW,
+    completed_at: datetime | None = None,
+) -> ReelJobRef:
+    return ReelJobRef(
+        id=id if id is not None else UUID(int=0x9E31),
+        org_id=org_id,
+        created_by=created_by,
+        status=status,
+        source_research_run_id=source_research_run_id,
+        execution_id=execution_id,
+        result_ref=result_ref,
+        client_request_id=client_request_id,
+        title=title,
+        created_at=created_at,
+        completed_at=completed_at,
+    )
+
+
 class SessionHolder:
     """Mutable holder so a single app can be driven as different users.
 
@@ -115,6 +145,8 @@ def build_fake_deps(
     identity: Any,
     control_plane: Any,
     launch: Any,
+    reel_job_repo: Any = None,
+    reel_dispatch: Any = None,
     config: dict[str, Any] | None = None,
     clock: Callable[[], datetime] | None = None,
     uuid_factory: Callable[[], UUID] | None = None,
@@ -128,6 +160,7 @@ def build_fake_deps(
     import logging
 
     from ui.app import AppDeps, default_session_provider
+    from ui.workspace.fakes import FakeReelDispatch, FakeReelJobRepo
 
     cfg = config or {
         "default_org_slug": "silmari-default",
@@ -144,6 +177,8 @@ def build_fake_deps(
         identity=identity,
         control_plane=control_plane,
         launch=launch,
+        reel_job_repo=reel_job_repo if reel_job_repo is not None else FakeReelJobRepo(),
+        reel_dispatch=reel_dispatch if reel_dispatch is not None else FakeReelDispatch(),
         config=cfg,
         session_provider=default_session_provider,
         clock=clock or (lambda: FIXED_NOW),
