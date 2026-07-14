@@ -652,7 +652,10 @@ def create_app(
             source_research_run_id=ref.id,
             execution_id=dispatch.execution_id,
             result_ref=None,
-            client_request_id=body.get("clientRequestId"),
+            # Idempotency key: default to the job's own id when the client omits
+            # one, so the NOT NULL + unique(org,user,client_request_id) constraint
+            # is always satisfied (a client-supplied id still enables replay dedup).
+            client_request_id=body.get("clientRequestId") or str(job_id),
             created_at=deps.clock(),
         )
         try:
