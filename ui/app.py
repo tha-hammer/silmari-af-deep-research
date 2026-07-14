@@ -630,10 +630,17 @@ def create_app(
         ordered = sorted(
             selected, key=lambda p: p.get("position", 0) if isinstance(p, Mapping) else 0
         )
+        # Dispatch payload MUST match the reel-af `reel_research_to_reel` reasoner's
+        # input contract (agentfield maps keys -> params by exact name). Keys are
+        # snake_case, and `source_execution_id` is REQUIRED — it is the ref the
+        # reasoner fetch_body()'s from the control plane. Omitting it 422s the agent
+        # ("Missing required field: source_execution_id"). userId/orgId are the
+        # server-injected principal (ignored by the reasoner; asserted by tests).
         payload = {
-            "selectedParagraphs": ordered,
-            "sourceRunId": ref.run_id,
-            "sourcePackageRef": ref.execution_id or ref.result_ref,
+            "source_execution_id": ref.execution_id or ref.result_ref,
+            "selected_paragraphs": ordered,
+            "source_run_id": ref.run_id,
+            "source_package_ref": ref.execution_id or ref.result_ref,
             "citations": body.get("citations", []),
             "userId": str(ctx.user_id),
             "orgId": str(ctx.org_id),
