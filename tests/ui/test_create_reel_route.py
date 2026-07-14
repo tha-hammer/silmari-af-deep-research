@@ -117,8 +117,11 @@ def test_create_reel_injects_server_principal_not_client_body():
     payload = dispatch.calls[0]
     assert payload["userId"] == str(U1)          # server-injected
     assert payload["orgId"] == str(ORG)
-    assert payload["sourcePackageRef"] == "exec_src_0001"  # source run's execution id
-    assert payload["sourceRunId"] == "run_src_0001"
+    # Dispatch payload must use the reel-af reasoner's snake_case contract; the
+    # REQUIRED source_execution_id is what it fetch_body()'s (its absence 422s the agent).
+    assert payload["source_execution_id"] == "exec_src_0001"
+    assert payload["source_package_ref"] == "exec_src_0001"  # source run's execution id
+    assert payload["source_run_id"] == "run_src_0001"
 
 
 # --------------------------------------------------------------------------- #
