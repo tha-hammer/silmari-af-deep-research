@@ -86,6 +86,21 @@ def test_create_reel_202_dispatches_and_writes_row():
     assert job.execution_id == "exec_reel_0001"
 
 
+def test_create_reel_defaults_client_request_id_when_omitted():
+    # Regression: reel_job.client_request_id is NOT NULL in Postgres. When the
+    # Create Reel UI omits clientRequestId, the server must default it, else the
+    # INSERT raises NotNullViolation → unhandled 500 (observed in prod 2026-07-14).
+    client, repo, reel_repo, _dispatch, _ = _build()
+    _seed_run(repo)
+    resp = client.post(
+        "/api/create-reel",
+        json={"selectedParagraphs": SELECTION, "sourceRunId": "run_src_0001"},
+    )
+    assert resp.status_code == 202
+    job = reel_repo.get_by_context(make_ctx(), resp.get_json()["job_id"])
+    assert job.client_request_id, "client_request_id must be non-null when omitted by client"
+
+
 def test_create_reel_injects_server_principal_not_client_body():
     client, repo, _, dispatch, _ = _build()
     _seed_run(repo)
