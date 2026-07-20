@@ -13,11 +13,12 @@ import hashlib
 import os
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, NoReturn, Optional, Sequence, Tuple, Union
 
 import aiohttp
-from agentfield import Agent, AIConfig
+from agentfield import Agent, AIConfig, ReasonerFailed
 from pydantic import BaseModel, Field
+from skills.search import get_available_providers
 from temporal_context import get_temporal_context
 from doc_generation_pipeline import (
     DocumentResponse as DocGenDocumentResponse,
@@ -73,6 +74,21 @@ app = Agent(
 # ==============================================================================
 # CORE UTILITIES & HELPERS
 # ==============================================================================
+
+
+class SearchUnavailable(RuntimeError):
+    """Raised when every configured web-search provider has failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_errors: Sequence[Tuple[str, str]],
+    ) -> None:
+        self.provider_errors = list(provider_errors)
+        super().__init__(message)
+
+
 async def search_web_for_content(query: str) -> List[Dict]:
     """
     Performs a web search using the available search provider.
@@ -82,37 +98,43 @@ async def search_web_for_content(query: str) -> List[Dict]:
 
     Set SEARCH_PROVIDER env var to force a specific provider.
     """
-    from skills.search import search, list_provider_status
+    from skills.search import (
+        SearchProvidersExhausted,
+        list_provider_status,
+        search,
+    )
+
+    # Keep provider visibility for operational debugging, but let the facade
+    # produce the typed no-capability failure.
+    status = list_provider_status()
+    available = [name for name, is_available in status.items() if is_available]
+    if available:
+        print(f"🔍 DEBUG: Available search providers: {available}")
+    else:
+        print("⚠️ WARNING: No search providers available! Configure at least one API key.")
 
     try:
-        # Log provider status on first call for debugging
-        status = list_provider_status()
-        available = [name for name, is_available in status.items() if is_available]
-        if available:
-            print(f"🔍 DEBUG: Available search providers: {available}")
-        else:
-            print("⚠️ WARNING: No search providers available! Configure at least one API key.")
-            return []
-
         response = await search(query)
-        print(f"🔍 DEBUG: Search completed via {response.provider} - {len(response.results)} results for: {query[:50]}...")
+    except SearchProvidersExhausted as exc:
+        raise SearchUnavailable(
+            str(exc), provider_errors=exc.provider_errors
+        ) from exc
 
-        # Convert SearchResult objects to dicts matching expected format
-        return [
-            {
-                "url": result.url,
-                "title": result.title,
-                "content": result.content,
-                "description": result.description,
-            }
-            for result in response.results
-        ]
-    except RuntimeError as e:
-        print(f"⚠️ WARNING: No search providers available: {e}")
-        return []
-    except Exception as e:
-        print(f"❌ ERROR: Search failed for query '{query}': {e}")
-        return []
+    print(
+        f"🔍 DEBUG: Search completed via {response.provider} - "
+        f"{len(response.results)} results for: {query[:50]}..."
+    )
+
+    # A successful provider response with no results is a genuine empty.
+    return [
+        {
+            "url": result.url,
+            "title": result.title,
+            "content": result.content,
+            "description": result.description,
+        }
+        for result in response.results
+    ]
 
 
 async def ai_with_dynamic_params(
@@ -352,6 +374,42 @@ class LoopDecision(BaseModel):
     should_continue: bool = Field(description="True if another research loop is needed")
     termination_reason: str = Field(description="Why stopping or continuing")
     focus_areas: str = Field(description="What to focus on in next iteration")
+
+
+def _new_unique_articles(
+    existing_articles: Sequence[Article],
+    candidate_articles: Sequence[Article],
+) -> List[Article]:
+    """Return candidate articles whose content is not already represented."""
+    seen_hashes = {article.content_hash for article in existing_articles}
+    unique_articles = []
+    for article in candidate_articles:
+        if article.content_hash not in seen_hashes:
+            unique_articles.append(article)
+            seen_hashes.add(article.content_hash)
+    return unique_articles
+
+
+def _fail_closed(
+    message: str,
+    *,
+    source_articles: Sequence[Article],
+    provider_errors: Sequence[Tuple[str, str]],
+    quality_score: Optional[ResearchQualityScore] = None,
+    entities: Sequence[Entity] = (),
+) -> NoReturn:
+    """Fail a research run while preserving its partial diagnostic state."""
+    raise ReasonerFailed(
+        message,
+        result={
+            "total_sources": len(source_articles),
+            "final_quality_score": (
+                quality_score.confidence_score if quality_score else 0.0
+            ),
+            "provider_errors": list(provider_errors),
+            "entities": [entity.model_dump() for entity in entities],
+        },
+    )
 
 
 # ==============================================================================
@@ -1515,6 +1573,15 @@ async def prepare_research_package(
     """
     Iterative research orchestrator with multi-stream intelligence gathering.
     """
+    if not get_available_providers():
+        _fail_closed(
+            "Search capability unavailable: No search providers configured",
+            source_articles=[],
+            provider_errors=[
+                ("<none>", "No search providers configured")
+            ],
+        )
+
     start_time = time.time()
     app.note(f"Beginning research on: '{query[:60]}{'...' if len(query) > 60 else ''}'")
 
@@ -1613,16 +1680,36 @@ async def prepare_research_package(
         article_id_offset = len(all_source_articles)
 
         for i, stream in enumerate(search_streams):
-            stream_result = await execute_intelligence_stream_comprehensive(
-                stream["stream_name"],
-                stream.get("search_queries", []),
-                stream["analysis_focus"],
-                classification.core_subject,
-                classification.key_question,
-                article_id_offset + (i * 100),
-                model,
-                api_key,
-            )
+            try:
+                stream_result = await execute_intelligence_stream_comprehensive(
+                    stream["stream_name"],
+                    stream.get("search_queries", []),
+                    stream["analysis_focus"],
+                    classification.core_subject,
+                    classification.key_question,
+                    article_id_offset + (i * 100),
+                    model,
+                    api_key,
+                )
+            except SearchUnavailable as exc:
+                completed_articles = [
+                    article
+                    for result in stream_results
+                    for article in result.source_articles
+                ]
+                partial_articles = [
+                    *all_source_articles,
+                    *_new_unique_articles(
+                        all_source_articles, completed_articles
+                    ),
+                ]
+                _fail_closed(
+                    f"Search capability unavailable: {exc}",
+                    source_articles=partial_articles,
+                    provider_errors=exc.provider_errors,
+                    quality_score=quality_score,
+                    entities=current_entities,
+                )
             stream_results.append(stream_result)
 
         # === EVIDENCE COLLECTION ===
@@ -1634,13 +1721,9 @@ async def prepare_research_package(
             iteration_evidence.extend(stream_result.article_evidence)
 
         # Deduplicate new articles
-        new_unique_articles = []
-        existing_hashes = {a.content_hash for a in all_source_articles}
-
-        for article in iteration_articles:
-            if article.content_hash not in existing_hashes:
-                new_unique_articles.append(article)
-                existing_hashes.add(article.content_hash)
+        new_unique_articles = _new_unique_articles(
+            all_source_articles, iteration_articles
+        )
 
         all_source_articles.extend(new_unique_articles)
         all_article_evidence.extend(iteration_evidence)
@@ -1812,6 +1895,15 @@ async def prepare_research_package(
         source_articles=all_source_articles,
         article_evidence=all_article_evidence,
     )
+
+    if not all_source_articles:
+        _fail_closed(
+            "Research produced zero sources",
+            source_articles=all_source_articles,
+            provider_errors=[],
+            quality_score=quality_score,
+            entities=current_entities,
+        )
 
     execution_time = time.time() - start_time
     app.note("Analysis complete — ready to present findings")

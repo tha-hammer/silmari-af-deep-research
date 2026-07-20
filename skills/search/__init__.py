@@ -25,7 +25,8 @@ Usage:
 """
 
 import asyncio
-from typing import List, Optional
+import os
+from typing import Awaitable, Callable, List, Optional, Sequence
 from datetime import datetime
 
 from .base import SearchProvider, SearchResult, SearchResponse
@@ -33,6 +34,11 @@ from .jina import JinaSearchProvider
 from .tavily import TavilySearchProvider
 from .firecrawl import FirecrawlSearchProvider
 from .serper import SerperSearchProvider
+from .errors import (
+    SearchProvidersExhausted,
+    Transience,
+    classify_search_error,
+)
 from .registry import (
     get_default_provider,
     get_provider,
@@ -45,9 +51,53 @@ from .registry import (
 )
 
 
-async def search(query: str) -> SearchResponse:
+def _ordered_with_forced_first(
+    providers: Sequence[SearchProvider],
+) -> List[SearchProvider]:
+    """Move an available forced provider ahead of registry priority order."""
+    ordered = list(providers)
+    forced = os.getenv("SEARCH_PROVIDER", "").lower().strip()
+    if not forced:
+        return ordered
+
+    for index, provider in enumerate(ordered):
+        if provider.name.lower() == forced:
+            remaining = ordered.copy()
+            forced_provider = remaining.pop(index)
+            return [forced_provider, *remaining]
+    return ordered
+
+
+async def _search_with_retry(
+    provider: SearchProvider,
+    query: str,
+    sleep: Callable[[float], Awaitable[None]],
+    max_retries: int,
+) -> SearchResponse:
+    """Search one provider, retrying only failures classified transient."""
+    for attempt in range(max_retries + 1):
+        try:
+            return await provider.search(query)
+        except Exception as exc:
+            should_retry = (
+                classify_search_error(exc) is Transience.TRANSIENT
+                and attempt < max_retries
+            )
+            if not should_retry:
+                raise
+            await sleep(float(2**attempt))
+
+    raise AssertionError("retry loop completed without returning or raising")
+
+
+async def search(
+    query: str,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    max_retries: int = 2,
+) -> SearchResponse:
     """
-    Search using the default available provider.
+    Search available providers in priority order with bounded retries.
 
     Args:
         query: Search term to query
@@ -56,15 +106,29 @@ async def search(query: str) -> SearchResponse:
         SearchResponse: Unified search results
 
     Raises:
-        RuntimeError: If no providers are available
+        SearchProvidersExhausted: If no provider can complete the search
+        ValueError: If max_retries is negative
     """
-    provider = get_default_provider()
-    if not provider:
-        raise RuntimeError(
-            "No search providers available. Please configure at least one of: "
-            "JINA_API_KEY, TAVILY_API_KEY, FIRECRAWL_API_KEY, or SERPER_API_KEY"
+    if max_retries < 0:
+        raise ValueError("max_retries must be non-negative")
+
+    providers = get_available_providers()
+    if not providers:
+        raise SearchProvidersExhausted(
+            [("<none>", "No search providers configured")]
         )
-    return await provider.search(query)
+
+    provider_errors = []
+    for provider in _ordered_with_forced_first(providers):
+        try:
+            return await _search_with_retry(
+                provider, query, sleep, max_retries
+            )
+        except Exception as exc:
+            provider_errors.append((provider.name, str(exc)))
+            print(f"Search provider '{provider.name}' failed: {exc}")
+
+    raise SearchProvidersExhausted(provider_errors)
 
 
 async def search_with_provider(query: str, provider: str) -> SearchResponse:
@@ -266,9 +330,9 @@ def search_sync(query: str) -> SearchResponse:
     """
     try:
         loop = asyncio.get_event_loop()
-        return loop.run_until_complete(search(query))
     except RuntimeError:
         return asyncio.run(search(query))
+    return loop.run_until_complete(search(query))
 
 
 __all__ = [
@@ -287,6 +351,10 @@ __all__ = [
     "SearchResult",
     "SearchResponse",
     "SearchProvider",
+    # Errors
+    "SearchProvidersExhausted",
+    "Transience",
+    "classify_search_error",
     # Provider classes
     "JinaSearchProvider",
     "TavilySearchProvider",
